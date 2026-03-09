@@ -136,35 +136,7 @@ make
 
 1. **Project 1 (Threads):** Implementing `join()`, `Alarm.waitUntil()`, and condition variables.
 2. **Project 2 (User Programs):** Handling system calls (read, write, exit) and memory mapping.
-3. **Project 3 (VM):** Implementing demand paging and swap files.
 
 ---
 
-
-
-```markdown
-# Nachos Development Setup & Workflow Guide
-
-This guide covers the environment setup and development workflow for our Nachos projects. We are using **Java 11** to ensure compatibility with the Nachos hardware simulator.
-
----
-
-## 1. Environment Setup
-
-### Install JDK 11
-Nachos was designed for older Java versions. Using modern Java (like 22) will cause "LinkageErrors" and syntax issues with the `yield` keyword.
-
-#### **macOS (Homebrew)**
-1. Install the OpenJDK:
-   ```bash
-   brew install openjdk@11
-
-```
-
-2. **Path Configuration:** Add this to your shell profile (`~/.zshrc` or `~/.bash_profile`):
-```bash
-export JAVA_HOME=/opt/homebrew/opt/openjdk@11
-export PATH=$JAVA_HOME/bin:$PATH
-
-```
 
