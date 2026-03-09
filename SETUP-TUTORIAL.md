@@ -70,9 +70,10 @@ The root directory contains the source code folders and the project build folder
 * `machine/`: **DO NOT TOUCH.** This simulates the MIPS hardware.
 
 
-* **Build Folders (`proj1`, `proj2`, etc.):**
+### **Build Folders (`proj1`, `proj2`, etc.):**
 * These contain the `Makefile` and `nachos.conf`.
 * You run your commands inside these folders.
+* Build folders only contain compiled java code.
 
 
 
