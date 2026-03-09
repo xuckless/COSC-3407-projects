@@ -1,0 +1,28 @@
+# --- IntelliJ / JetBrains ---
+.idea/
+*.iml
+out/
+gen/
+
+# --- VS Code ---
+.vscode/
+*.code-workspace
+
+# --- Nachos Compiled Files ---
+*.class
+bin/*.class
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
+
+# --- Build Artifacts ---
+# Excludes the compiled 'nachos' folder created inside projX directories
+proj1/nachos/
+proj2/nachos/
+proj3/nachos/
+proj4/nachos/
+
+# --- Temporary/Log Files ---
+*.log
+*.tmp
