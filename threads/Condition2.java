@@ -82,4 +82,98 @@ public class Condition2 {
         }
         Machine.interrupt().restore(intStatus);
     }
+
+    public static void selfTest() {
+        System.out.println("\n----- Running Condition2.selfTest() ------\n");
+
+        // test case 1: basic sleep and wake, one thread sleeps on con, other wakes it up
+        System.out.println("Test 1: Basic sleep and wake");
+        final Lock lock1 = new Lock();
+        final Condition2 cv1 = new Condition2(lock1);
+
+        // create thread that acquires lock and sleeps on the condition
+        // will block here until another thread calls the wake function
+        KThread t1 = new KThread(new Runnable() {
+            public void run() {
+                lock1.acquire();
+                System.out.println("Thread 1: sleeping on condition");
+                cv1.sleep(); // blocks until wake is called
+                System.out.println("Thread 1: woke up");
+                lock1.release();
+            }
+        }).setName("Thread 1");
+
+        t1.fork();
+        KThread.yield(); // let thread 1 run and block before we make it
+
+        // the main thread acquires the lock, wakes thread 1
+        lock1.acquire();
+        System.out.println("Main: waking up");
+        cv1.wake();
+        lock1.release();
+        t1.join();
+
+        System.out.println("Test 1 has been passed.");
+
+        // test case 2: wakeAll: multiple threads sleeping on the asme condition, all should wake up
+        System.out.println("Test 2: wakeAll");
+        final Lock lock2 = new Lock();
+        final Condition2 cv2 = new Condition2(lock2);
+
+        // create 2 threads, both sleep on same condition var
+        KThread t2 = new KThread(new Runnable(){
+            public void run() {
+                lock2.acquire();
+                System.out.println("Thread 2: sleeping on condition");
+                cv2.sleep(); // blocks until wakeAll() is called
+                System.out.println("Thread 2: woke up");
+                lock2.release();
+            }
+        }).setName("Thread 2");
+
+        // create second kthread (im not going to do this in a loop, simpler to do it this way)
+        KThread t3 = new KThread(new Runnable(){
+            public void run() {
+                lock2.acquire();
+                System.out.println("Thread 3: sleeping on condition");
+                cv2.sleep(); // blocks until wakeAll() is called
+                System.out.println("Thread 3: woke up");
+                lock2.release();
+            }
+        }).setName("Thread 3");
+
+        // fork both threads
+        t2.fork();
+        t3.fork();
+        KThread.yield(); // both threads run and block
+
+        // now we wake all sleeping threads at the same time
+        lock2.acquire();
+        System.out.println("Main Thread: waking all");
+        cv2.wakeAll(); // call wakeAll
+        
+        // release lock, then join
+        lock2.release();
+        t2.join();
+        t3.join();
+
+        System.out.println("Test 2 has been passed. \n");
+
+        // test case 3: wake with an empty queue
+        // if wake is called when no threads are sleeping, it should do nothing and not crash.
+
+        System.out.println("Test 3: wake with an empty queue");
+        final Lock lock3 = new Lock();
+        final Condition2 cv3 = new Condition2(lock3);
+
+        // acquire lock, wake, then release it, if it doesnt crash, we are good.
+        lock3.acquire();
+        cv3.wake();
+        lock3.release();
+
+        System.out.println("Test 3 has been passed. \n");
+
+        System.out.println("----- Condition2.selfTest() Completed -----\n");
+
+    }   
 }
