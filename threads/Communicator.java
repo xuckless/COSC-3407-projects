@@ -13,7 +13,26 @@ public class Communicator {
     /**
      * Allocate a new communicator.
      */
+
+    private Lock lock;
+    private Condition2 speakerCond;
+    private Condition2 listenerCond;
+    private int message;
+    private boolean ready;
+    private int waitingSpeakers;
+    private int waitingListeners;
+
+
     public Communicator() {
+        // constructor
+
+        lock = new Lock();
+        speakerCond = new Condition2(lock);
+        listenerCond = new Condition2(lock);
+        ready = false;
+        waitingSpeakers = 0;
+        waitingListeners = 0;
+
     }
 
     /**
@@ -27,6 +46,27 @@ public class Communicator {
      * @param	word	the integer to transfer.
      */
     public void speak(int word) {
+        // acqure lock so we can enter the critcal section
+        lock.acquire();
+        waitingSpeakers++; // increment speakers
+
+        // sleep if no listener waiting, or message is alr pending
+        while (ready || waitingListeners == 0) {
+            speakerCond.sleep();
+        }
+
+        // deposit message and signal listener
+        waitingSpeakers--;
+        message = word;
+        ready = true;
+        listenerCond.wake();
+
+        // wait for listener to confirm it got message
+        while (ready) {
+            speakerCond.sleep();
+        }
+
+        lock.release();
     }
 
     /**
@@ -36,6 +76,28 @@ public class Communicator {
      * @return	the integer transferred.
      */    
     public int listen() {
-	return 0;
+        // acquire lock to enter critical section
+        lock.acquire();
+        waitingListeners++;
+
+        // wake a speaker that can be waiting for a listener
+        speakerCond.wake();
+
+        // wait until message been deposited
+        while(!ready) {
+            listenerCond.sleep();
+        }
+
+        // pick up message
+        waitingListeners--;
+        int word = message;
+        ready = false;
+
+        // tell the speaker the message was recieved
+        speakerCond.wake();
+
+        // release the lock
+        lock.release();
+	    return word;
     }
 }
