@@ -2,6 +2,7 @@ package nachos.threads;
 
 import nachos.machine.*;
 import java.util.LinkedList;
+
 /**
  * A KThread is a thread that can be used to execute Nachos kernel code. Nachos
  * allows multiple threads to run concurrently.
@@ -27,504 +28,597 @@ import java.util.LinkedList;
  * new KThread(p).fork();
  * </pre></blockquote>
  */
+
 public class KThread {
-	/**
-	 * Get the current thread.
-	 *
-	 * @return	the current thread.
-	 */
-	public static KThread currentThread() {
-		Lib.assertTrue(currentThread != null);
-		return currentThread;
-	}
-	
-	/**
-	 * Allocate a new <tt>KThread</tt>. If this is the first <tt>KThread</tt>,
-	 * create an idle thread as well.
-	 */
-	public KThread() {
-		if (currentThread != null) {
-			tcb = new TCB();
-		}
-		else {
-			readyQueue = ThreadedKernel.scheduler.newThreadQueue(false);
-			readyQueue.acquire(this);
-			
-			currentThread = this;
-			tcb = TCB.currentTCB();
-			name = "main";
-			restoreState();
-			
-			createIdleThread();
-		}
-	}
-	
-	/**
-	 * Allocate a new KThread.
-	 *
-	 * @param	target	the object whose <tt>run</tt> method is called.
-	 */
-	public KThread(Runnable target) {
-		this();
-		this.target = target;
-		System.out.println("Setup Complete");
-	}
-	
-	/**
-	 * Set the target of this thread.
-	 *
-	 * @param	target	the object whose <tt>run</tt> method is called.
-	 * @return	this thread.
-	 */
-	public KThread setTarget(Runnable target) {
-		Lib.assertTrue(status == statusNew);
-		
-		this.target = target;
-		return this;
-	}
-	
-	/**
-	 * Set the name of this thread. This name is used for debugging purposes
-	 * only.
-	 *
-	 * @param	name	the name to give to this thread.
-	 * @return	this thread.
-	 */
-	public KThread setName(String name) {
-		this.name = name;
-		return this;
-	}
-	
-	/**
-	 * Get the name of this thread. This name is used for debugging purposes
-	 * only.
-	 *
-	 * @return	the name given to this thread.
-	 */
-	public String getName() {
-		return name;
-	}
-	
-	/**
-	 * Get the full name of this thread. This includes its name along with its
-	 * numerical ID. This name is used for debugging purposes only.
-	 *
-	 * @return	the full name given to this thread.
-	 */
-	public String toString() {
-		return (name + " (#" + id + ")");
-	}
-	
-	/**
-	 * Deterministically and consistently compare this thread to another
-	 * thread.
-	 */
-	public int compareTo(Object o) {
-		KThread thread = (KThread) o;
-		
-		if (id < thread.id)
-			return -1;
-		else if (id > thread.id)
-			return 1;
-		else
-			return 0;
-	}
-	
-	/**
-	 * Causes this thread to begin execution. The result is that two threads
-	 * are running concurrently: the current thread (which returns from the
-	 * call to the <tt>fork</tt> method) and the other thread (which executes
-	 * its target's <tt>run</tt> method).
-	 */
-	public void fork() {
-		Lib.assertTrue(status == statusNew);
-		Lib.assertTrue(target != null);
-		
-		Lib.debug(dbgThread,
-			"Forking thread: " + toString() + " Runnable: " + target);
-		
-		boolean intStatus = Machine.interrupt().disable();
-		
-		tcb.start(new Runnable() {
-			public void run() {
-				runThread();
+    /**
+     * Get the current thread.
+     *
+     * @return	the current thread.
+     */
+    public static KThread currentThread() {
+	Lib.assertTrue(currentThread != null);
+	return currentThread;
+    }
+    
+    /**
+     * Allocate a new <tt>KThread</tt>. If this is the first <tt>KThread</tt>,
+     * create an idle thread as well.
+     */
+		public KThread() {
+			if (currentThread != null) {
+					tcb = new TCB();
 			}
-		});
+			else {
+					readyQueue = ThreadedKernel.scheduler.newThreadQueue(false);
+					readyQueue.acquire(this);
 		
-		ready();
+					currentThread = this;
+					tcb = TCB.currentTCB();
+					name = "main";
+					restoreState();
 		
-		Machine.interrupt().restore(intStatus);
-	}
-	
-	private void runThread() {
-		begin();
-		target.run();
-		finish();
-	}
-	
-	private void begin() {
-		Lib.debug(dbgThread, "Beginning thread: " + toString());
-		
-		Lib.assertTrue(this == currentThread);
-		
-		restoreState();
-		
-		Machine.interrupt().enable();
-	}
-	
-	/**
-	 * Finish the current thread and schedule it to be destroyed when it is
-	 * safe to do so. This method is automatically called when a thread's
-	 * <tt>run</tt> method returns, but it may also be called directly.
-	 *
-	 * The current thread cannot be immediately destroyed because its stack and
-	 * other execution state are still in use. Instead, this thread will be
-	 * destroyed automatically by the next thread to run, when it is safe to
-	 * delete this thread.
-	 */
-	public static void finish() {
-		Lib.debug(dbgThread, "Finishing thread: " + currentThread.toString());
-		
-		Machine.interrupt().disable();
-		KThread current = KThread.currentThread();
-		Machine.autoGrader().finishingCurrentThread();
-		
-		Lib.assertTrue(toBeDestroyed == null);
-		toBeDestroyed = currentThread;
-		
-		while (!current.waitQueue.isEmpty()) {
-			KThread thread = current.waitQueue.removeFirst();
-			thread.ready();  // moves thread to readyQueue
-		}
-		
-		currentThread.status = statusFinished;
-		
-		sleep();
-	}
-	
-	/**
-	 * Relinquish the CPU if any other thread is ready to run. If so, put the
-	 * current thread on the ready queue, so that it will eventually be
-	 * rescheuled.
-	 *
-	 * <p>
-	 * Returns immediately if no other thread is ready to run. Otherwise
-	 * returns when the current thread is chosen to run again by
-	 * <tt>readyQueue.nextThread()</tt>.
-	 *
-	 * <p>
-	 * Interrupts are disabled, so that the current thread can atomically add
-	 * itself to the ready queue and switch to the next thread. On return,
-	 * restores interrupts to the previous state, in case <tt>yield()</tt> was
-	 * called with interrupts disabled.
-	 */
-	public static void yield() {
-		Lib.debug(dbgThread, "Yielding thread: " + currentThread.toString());
-		
-		Lib.assertTrue(currentThread.status == statusRunning);
-		
-		boolean intStatus = Machine.interrupt().disable();
-		
-		currentThread.ready();
-		
-		runNextThread();
-		
-		Machine.interrupt().restore(intStatus);
-	}
-	
-	/**
-	 * Relinquish the CPU, because the current thread has either finished or it
-	 * is blocked. This thread must be the current thread.
-	 *
-	 * <p>
-	 * If the current thread is blocked (on a synchronization primitive, i.e.
-	 * a <tt>Semaphore</tt>, <tt>Lock</tt>, or <tt>Condition</tt>), eventually
-	 * some thread will wake this thread up, putting it back on the ready queue
-	 * so that it can be rescheduled. Otherwise, <tt>finish()</tt> should have
-	 * scheduled this thread to be destroyed by the next thread to run.
-	 */
-	public static void sleep() {
-		Lib.debug(dbgThread, "Sleeping thread: " + currentThread.toString());
-		
-		Lib.assertTrue(Machine.interrupt().disabled());
-		
-		if (currentThread.status != statusFinished)
-			currentThread.status = statusBlocked;
-		
-		runNextThread();
-	}
-	
-	/**
-	 * Moves this thread to the ready state and adds this to the scheduler's
-	 * ready queue.
-	 */
-	public void ready() {
-		Lib.debug(dbgThread, "Ready thread: " + toString());
-		
-		Lib.assertTrue(Machine.interrupt().disabled());
-		Lib.assertTrue(status != statusReady);
-		
-		status = statusReady;
-		if (this != idleThread)
-			readyQueue.waitForAccess(this);
-		
-		Machine.autoGrader().readyThread(this);
-	}
-	
-	/**
-	 * Waits for this thread to finish. If this thread is already finished,
-	 * return immediately. This method must only be called once; the second
-	 * call is not guaranteed to return. This thread must not be the current
-	 * thread.
-	 */
-	public void join() {
-		Lib.debug(dbgThread, "Joining to thread: " + toString());
-		Lib.assertTrue(this != currentThread);
-		boolean intStatus = Machine.interrupt().disable();
-		KThread current = KThread.currentThread();
-		//if finished, just return
-		if (this.status == statusFinished) {
-			Machine.interrupt().restore(intStatus);
-			return;
-		}
-		
-		
-		this.waitQueue.add(current);
-		
-		// Put current thread to sleep
-		KThread.sleep();
-		
-		Machine.interrupt().restore(intStatus);
-		
-		
-		
-		
-	}
-	
-	/**
-	 * Create the idle thread. Whenever there are no threads ready to be run,
-	 * and <tt>runNextThread()</tt> is called, it will run the idle thread. The
-	 * idle thread must never block, and it will only be allowed to run when
-	 * all other threads are blocked.
-	 *
-	 * <p>
-	 * Note that <tt>ready()</tt> never adds the idle thread to the ready set.
-	 */
-	private static void createIdleThread() {
-		Lib.assertTrue(idleThread == null);
-		
-		idleThread = new KThread(new Runnable() {
-			public void run() { while (true) KThread.yield(); }
-		});
-		idleThread.setName("idle");
-		
-		Machine.autoGrader().setIdleThread(idleThread);
-		
-		idleThread.fork();
-	}
-	
-	/**
-	 * Determine the next thread to run, then dispatch the CPU to the thread
-	 * using <tt>run()</tt>.
-	 */
-	private static void runNextThread() {
-		KThread nextThread = readyQueue.nextThread();
-		if (nextThread == null)
-			nextThread = idleThread;
-		
-		nextThread.run();
-	}
-	
-	/**
-	 * Dispatch the CPU to this thread. Save the state of the current thread,
-	 * switch to the new thread by calling <tt>TCB.contextSwitch()</tt>, and
-	 * load the state of the new thread. The new thread becomes the current
-	 * thread.
-	 *
-	 * <p>
-	 * If the new thread and the old thread are the same, this method must
-	 * still call <tt>saveState()</tt>, <tt>contextSwitch()</tt>, and
-	 * <tt>restoreState()</tt>.
-	 *
-	 * <p>
-	 * The state of the previously running thread must already have been
-	 * changed from running to blocked or ready (depending on whether the
-	 * thread is sleeping or yielding).
-	 *
-	 * 	finishing	<tt>true</tt> if the current thread is
-	 *				finished, and should be destroyed by the new
-	 *				thread.
-	 */
-	private void run() {
-		Lib.assertTrue(Machine.interrupt().disabled());
-		
-		Machine.yield();
-		
-		currentThread.saveState();
-		
-		Lib.debug(dbgThread, "Switching from: " + currentThread.toString()
-			+ " to: " + toString());
-		
-		currentThread = this;
-		
-		tcb.contextSwitch();
-		
-		currentThread.restoreState();
-	}
-	
-	/**
-	 * Prepare this thread to be run. Set <tt>status</tt> to
-	 * <tt>statusRunning</tt> and check <tt>toBeDestroyed</tt>.
-	 */
-	protected void restoreState() {
-		Lib.debug(dbgThread, "Running thread: " + currentThread.toString());
-		
-		Lib.assertTrue(Machine.interrupt().disabled());
-		Lib.assertTrue(this == currentThread);
-		Lib.assertTrue(tcb == TCB.currentTCB());
-		
-		Machine.autoGrader().runningThread(this);
-		
-		status = statusRunning;
-		
-		if (toBeDestroyed != null) {
-			toBeDestroyed.tcb.destroy();
-			toBeDestroyed.tcb = null;
-			toBeDestroyed = null;
-		}
-	}
-	
-	/**
-	 * Prepare this thread to give up the processor. Kernel threads do not
-	 * need to do anything here.
-	 */
-	protected void saveState() {
-		Lib.assertTrue(Machine.interrupt().disabled());
-		Lib.assertTrue(this == currentThread);
-	}
-	
-	private static class PingTest implements Runnable {
-		PingTest(int which) {
-			this.which = which;
-		}
-		
-		public void run() {
-			for (int i=0; i<5; i++) {
-				System.out.println("*** thread " + which + " looped "
-					+ i + " times");
-				currentThread.yield();
+					createIdleThread();
 			}
 		}
-		private int which;
-	}
-	
-	/**
-	 * Tests whether this module is working.
-	 */
-	public static void selfTest() {
-		Lib.debug(dbgThread, "Enter KThread.selfTest");
-		joinTestReverseOrder();
-		joinTestAlreadyFinished();
+
+    /**
+     * Allocate a new KThread.
+     *
+     * @param	target	the object whose <tt>run</tt> method is called.
+     */
+    public KThread(Runnable target) {
+			this();
+			this.target = target;
+			System.out.println("Setup Complete");
+    }
+
+    /**
+     * Set the target of this thread.
+     *
+     * @param	target	the object whose <tt>run</tt> method is called.
+     * @return	this thread.
+     */
+    public KThread setTarget(Runnable target) {
+			Lib.assertTrue(status == statusNew);
+			
+			this.target = target;
+			return this;
+    }
+
+    /**
+     * Set the name of this thread. This name is used for debugging purposes
+     * only.
+     *
+     * @param	name	the name to give to this thread.
+     * @return	this thread.
+     */
+    public KThread setName(String name) {
+			this.name = name;
+			return this;
+    }
+
+    /**
+     * Get the name of this thread. This name is used for debugging purposes
+     * only.
+     *
+     * @return	the name given to this thread.
+     */     
+    public String getName() {
+			return name;
+    }
+
+    /**
+     * Get the full name of this thread. This includes its name along with its
+     * numerical ID. This name is used for debugging purposes only.
+     *
+     * @return	the full name given to this thread.
+     */
+    public String toString() {
+			return (name + " (#" + id + ")");
+    }
+
+    /**
+     * Deterministically and consistently compare this thread to another
+     * thread.
+     */
+    public int compareTo(Object o) {
+			KThread thread = (KThread) o;
 		
-	}
-	
-	
-	public static void joinTestReverseOrder() {
-		System.out.println();
-		System.out.println("\n=== Join Test 1: Reverse Order ===\n");
+			if (id < thread.id)
+					return -1;
+			else if (id > thread.id)
+					return 1;
+			else
+					return 0;
+    }
+
+    /**
+     * Causes this thread to begin execution. The result is that two threads
+     * are running concurrently: the current thread (which returns from the
+     * call to the <tt>fork</tt> method) and the other thread (which executes
+     * its target's <tt>run</tt> method).
+     */
+    public void fork() {
+			Lib.assertTrue(status == statusNew);
+			Lib.assertTrue(target != null);
+			
+			Lib.debug(dbgThread,
+					"Forking thread: " + toString() + " Runnable: " + target);
 		
-		final int N = 5;
-		KThread[] threads = new KThread[N];
+			boolean intStatus = Machine.interrupt().disable();
 		
-		// Create threads
-		for (int i = 0; i < N; i++) {
-			final int id = i;
-			threads[i] = new KThread(new Runnable() {
+			tcb.start(new Runnable() {
 				public void run() {
-					System.out.println("Thread " + id + " is running");
-					KThread.yield(); // simulate work
-					System.out.println("Thread " + id + " finished");
+						runThread();
 				}
-			}).setName("T" + i);
-		}
+					});
 		
-		// Fork all threads
-		for (int i = 0; i < N; i++) {
-			threads[i].fork();
-		}
+			ready();
+			
+			Machine.interrupt().restore(intStatus);
+    }
+
+    private void runThread() {
+			begin();
+			target.run();
+			finish();
+    }
+
+    private void begin() {
+			Lib.debug(dbgThread, "Beginning thread: " + toString());
+			
+			Lib.assertTrue(this == currentThread);
 		
-		// Join in reverse order
-		for (int i = N - 1; i >= 0; i--) {
-			System.out.println("Joining on thread " + i);
-			threads[i].join();
-		}
+			restoreState();
 		
-		System.out.println("Main thread finished waiting for all joins.");
-		System.out.println();
-	}
-	
-	public static void joinTestAlreadyFinished() {
-		System.out.println();
-		System.out.println("\n=== Join Test 2: Already Finished ===\n");
+			Machine.interrupt().enable();
+    }
+
+    /**
+     * Finish the current thread and schedule it to be destroyed when it is
+     * safe to do so. This method is automatically called when a thread's
+     * <tt>run</tt> method returns, but it may also be called directly.
+     *
+     * The current thread cannot be immediately destroyed because its stack and
+     * other execution state are still in use. Instead, this thread will be
+     * destroyed automatically by the next thread to run, when it is safe to
+     * delete this thread.
+     */
+    public static void finish() {
+			Lib.debug(dbgThread, "Finishing thread: " + currentThread.toString());
+			
+			Machine.interrupt().disable();
+		    KThread current = KThread.currentThread();
+
+			Machine.autoGrader().finishingCurrentThread();
 		
-		KThread t = new KThread(new Runnable() {
-			public void run() {
-				System.out.println("Child thread running and finishing quickly");
+			Lib.assertTrue(toBeDestroyed == null);
+			toBeDestroyed = currentThread;
+		
+             while (!current.waitQueue.isEmpty()) {
+                 KThread thread = current.waitQueue.removeFirst();
+                 thread.ready();  // moves thread to waitQueue
+             }
+		
+			currentThread.status = statusFinished;
+			
+			sleep();
+    }
+
+    /**
+     * Relinquish the CPU if any other thread is ready to run. If so, put the
+     * current thread on the ready queue, so that it will eventually be
+     * rescheuled.
+     *
+     * <p>
+     * Returns immediately if no other thread is ready to run. Otherwise
+     * returns when the current thread is chosen to run again by
+     * <tt>readyQueue.nextThread()</tt>.
+     *
+     * <p>
+     * Interrupts are disabled, so that the current thread can atomically add
+     * itself to the ready queue and switch to the next thread. On return,
+     * restores interrupts to the previous state, in case <tt>yield()</tt> was
+     * called with interrupts disabled.
+     */
+    public static void yield() {
+			Lib.debug(dbgThread, "Yielding thread: " + currentThread.toString());
+			
+			Lib.assertTrue(currentThread.status == statusRunning);
+			
+			boolean intStatus = Machine.interrupt().disable();
+		
+			currentThread.ready();
+		
+			runNextThread();
+			
+			Machine.interrupt().restore(intStatus);
+    }
+
+    /**
+     * Relinquish the CPU, because the current thread has either finished or it
+     * is blocked. This thread must be the current thread.
+     *
+     * <p>
+     * If the current thread is blocked (on a synchronization primitive, i.e.
+     * a <tt>Semaphore</tt>, <tt>Lock</tt>, or <tt>Condition</tt>), eventually
+     * some thread will wake this thread up, putting it back on the ready queue
+     * so that it can be rescheduled. Otherwise, <tt>finish()</tt> should have
+     * scheduled this thread to be destroyed by the next thread to run.
+     */
+    public static void sleep() {
+			Lib.debug(dbgThread, "Sleeping thread: " + currentThread.toString());
+			
+			Lib.assertTrue(Machine.interrupt().disabled());
+		
+			if (currentThread.status != statusFinished)
+					currentThread.status = statusBlocked;
+		
+			runNextThread();
+    }
+
+    /**
+     * Moves this thread to the ready state and adds this to the scheduler's
+     * ready queue.
+     */
+    public void ready() {
+			Lib.debug(dbgThread, "Ready thread: " + toString());
+			
+			Lib.assertTrue(Machine.interrupt().disabled());
+			Lib.assertTrue(status != statusReady);
+			
+			status = statusReady;
+			if (this != idleThread)
+					readyQueue.waitForAccess(this);
+			
+			Machine.autoGrader().readyThread(this);
+    }
+
+    /**
+     * Waits for this thread to finish. If this thread is already finished,
+     * return immediately. This method must only be called once; the second
+     * call is not guaranteed to return. This thread must not be the current
+     * thread.
+     */
+    public void join() {
+			Lib.debug(dbgThread, "Joining to thread: " + toString());
+			Lib.assertTrue(this != currentThread);
+            boolean intStatus = Machine.interrupt().disable();
+            KThread current = KThread.currentThread();
+            //if finished, just return
+            if (this.status == statusFinished) {
+                Machine.interrupt().restore(intStatus);
+                return;
+            }
+
+           
+                this.waitQueue.add(current);
+
+            // Put current thread to sleep
+                 KThread.sleep();
+
+                 Machine.interrupt().restore(intStatus);
+    }
+
+    /**
+     * Create the idle thread. Whenever there are no threads ready to be run,
+     * and <tt>runNextThread()</tt> is called, it will run the idle thread. The
+     * idle thread must never block, and it will only be allowed to run when
+     * all other threads are blocked.
+     *
+     * <p>
+     * Note that <tt>ready()</tt> never adds the idle thread to the ready set.
+     */
+    private static void createIdleThread() {
+			Lib.assertTrue(idleThread == null);
+			
+			idleThread = new KThread(new Runnable() {
+					public void run() { while (true) KThread.yield(); }
+			});
+			idleThread.setName("idle");
+		
+			Machine.autoGrader().setIdleThread(idleThread);
+			
+			idleThread.fork();
+    }
+    
+    /**
+     * Determine the next thread to run, then dispatch the CPU to the thread
+     * using <tt>run()</tt>.
+     */
+    private static void runNextThread() {
+			KThread nextThread = readyQueue.nextThread();
+			if (nextThread == null)
+					nextThread = idleThread;
+		
+			nextThread.run();
+    }
+
+    /**
+     * Dispatch the CPU to this thread. Save the state of the current thread,
+     * switch to the new thread by calling <tt>TCB.contextSwitch()</tt>, and
+     * load the state of the new thread. The new thread becomes the current
+     * thread.
+     *
+     * <p>
+     * If the new thread and the old thread are the same, this method must
+     * still call <tt>saveState()</tt>, <tt>contextSwitch()</tt>, and
+     * <tt>restoreState()</tt>.
+     *
+     * <p>
+     * The state of the previously running thread must already have been
+     * changed from running to blocked or ready (depending on whether the
+     * thread is sleeping or yielding).
+     *
+     * 	finishing	<tt>true</tt> if the current thread is
+     *				finished, and should be destroyed by the new
+     *				thread.
+     */
+    private void run() {
+			Lib.assertTrue(Machine.interrupt().disabled());
+		
+			Machine.yield();
+		
+			currentThread.saveState();
+		
+			Lib.debug(dbgThread, "Switching from: " + currentThread.toString()
+					+ " to: " + toString());
+		
+			currentThread = this;
+		
+			tcb.contextSwitch();
+		
+			currentThread.restoreState();
+    }
+
+    /**
+     * Prepare this thread to be run. Set <tt>status</tt> to
+     * <tt>statusRunning</tt> and check <tt>toBeDestroyed</tt>.
+     */
+    protected void restoreState() {
+			Lib.debug(dbgThread, "Running thread: " + currentThread.toString());
+			
+			Lib.assertTrue(Machine.interrupt().disabled());
+			Lib.assertTrue(this == currentThread);
+			Lib.assertTrue(tcb == TCB.currentTCB());
+		
+			Machine.autoGrader().runningThread(this);
+			
+			status = statusRunning;
+		
+			if (toBeDestroyed != null) {
+					toBeDestroyed.tcb.destroy();
+					toBeDestroyed.tcb = null;
+					toBeDestroyed = null;
 			}
-		}).setName("QuickThread");
-		
-		t.fork();
-		
-		// Ensure it finishes before join
-		t.join();
-		
-		System.out.println("First join completed.");
-		
-		// This should return immediately
-		System.out.println("Calling join again (should return immediately)");
-		t.join();
-		
-		System.out.println("Second join returned immediately.");
-		System.out.println();
-	}
+    }
+
+    /**
+     * Prepare this thread to give up the processor. Kernel threads do not
+     * need to do anything here.
+     */
+    protected void saveState() {
+			Lib.assertTrue(Machine.interrupt().disabled());
+			Lib.assertTrue(this == currentThread);
+    }
+
+    private static class PingTest implements Runnable {
+			PingTest(int which) {
+					this.which = which;
+			}
 	
-	private static final char dbgThread = 't';
-	
-	/**
-	 * Additional state used by schedulers.
-	 *
-	 * @see	nachos.threads.PriorityScheduler.ThreadState
-	 */
-	public Object schedulingState = null;
-	
-	private static final int statusNew = 0;
-	private static final int statusReady = 1;
-	private static final int statusRunning = 2;
-	private static final int statusBlocked = 3;
-	private static final int statusFinished = 4;
-	
-	/**
-	 * The status of this thread. A thread can either be new (not yet forked),
-	 * ready (on the ready queue but not running), running, or blocked (not
-	 * on the ready queue and not running).
-	 */
-	private int status = statusNew;
-	private String name = "(unnamed thread)";
-	private Runnable target;
-	private TCB tcb;
-	
-	/**
-	 * Unique identifer for this thread. Used to deterministically compare
-	 * threads.
-	 */
-	private int id = numCreated++;
-	/** Number of times the KThread constructor was called. */
-	private static int numCreated = 0;
-	
-	private static ThreadQueue readyQueue = null;
-	private static KThread currentThread = null;
-	private static KThread toBeDestroyed = null;
-	private static KThread idleThread = null;
-	
-	private LinkedList<KThread> waitQueue = new LinkedList<KThread>();
+			public void run() {
+				for (int i=0; i<5; i++) {
+					System.out.println("*** thread " + which + " looped "
+								 + i + " times");
+					currentThread.yield();
+				}
+			}
+			private int which;
+    }
+
+    /**
+     * Tests whether this module is working.
+     */
+    public static void selfTest() {
+			Lib.debug(dbgThread, "Enter KThread.selfTest");
+            joinTestReverseOrder();
+			joinTestAlreadyFinished();
+            MultipleJointest();
+           // SelfJoinTest(); 
+           // remove comment to preform test
+
+    }
+
+/*
+Test case 1: Reverse join
+Logic:create a set of threads, then attempt to join them in the reverse order of thier creation
+Expected: main thread needs to wait for all
+*/
+    public static void joinTestReverseOrder() {
+        System.out.println();
+        System.out.println("Reverse Order Test");
+
+        final int N = 5;
+         KThread[] threads = new KThread[N];
+
+         // Create threads
+        for (int i = 0; i < N; i++) {
+             final int id = i;
+        threads[i] = new KThread(new Runnable() {
+            public void run() {
+                System.out.println("Thread " + id + " is running");
+                KThread.yield(); // simulate work
+                System.out.println("Thread " + id + " finished");
+            }
+        }).setName("T" + i);
+    }
+
+    // Fork all threads
+    for (int i = 0; i < N; i++) {
+        threads[i].fork();
+    }
+
+    // Join in reverse order
+    for (int i = N - 1; i >= 0; i--) {
+        System.out.println("Joining on thread " + i);
+        threads[i].join();
+    }
+
+    System.out.println("Main thread finished waiting for all joins.");
+    System.out.println();
+}
+/*
+Test case 2: Already finished Thread
+Logic:create a thread, let it finish, then attempt to join it
+Expected: thread should return immediately
+*/
+    public static void joinTestAlreadyFinished() {
+        System.out.println();
+        System.out.println("Join on already finsihed thread test");
+    
+        KThread t = new KThread(new Runnable() {
+            public void run() {
+             System.out.println("Child thread running and finishing quickly");
+         }
+        }).setName("QuickThread");
+
+        t.fork();
+
+        // ensure it finishes before join
+        t.join();
+
+        System.out.println("First join completed.");
+
+        // should return immediately
+        System.out.println("Calling join again (should return immediately)");
+        t.join();
+
+        System.out.println("Second join returned immediately.");
+        System.out.println();
+}
+/*
+Test case 3: mutiple joins on same thread
+Logic: create one target thread and mutiple other threads that then attempt to join the target
+Expected: all joiner threads should wait until target is done, then continue
+*/
+
+public static void MultipleJointest() {
+    System.out.println();
+    System.out.println("Multiple Joiners Test");
+
+    KThread target = new KThread(new Runnable() {
+        public void run() {
+            System.out.println("Target thread running...");
+            for (int i = 0; i < 3; i++) {
+                KThread.yield();
+            }
+            System.out.println("Target thread finishing.");
+        }
+    }).setName("Target");
+
+    final int N = 3;
+    KThread[] joiners = new KThread[N];
+
+    for (int i = 0; i < N; i++) {
+        final int id = i;
+        joiners[i] = new KThread(new Runnable() {
+            public void run() {
+                System.out.println("Joiner " + id + " waiting on target");
+                target.join();
+                System.out.println("Joiner " + id + " resumed after target finished");
+            }
+        }).setName("Joiner-" + i);
+    }
+
+    target.fork();
+
+    for (int i = 0; i < N; i++) {
+        joiners[i].fork();
+    }
+
+    // let everything run
+    for (int i = 0; i < 5; i++) {
+        KThread.yield();
+    }
+
+    System.out.println("Multiple joiners test done.");
+    System.out.println();
+}
+
+
+
+
+
+/*
+Test case 4: self join Thread  
+Logic:create a thread and attempt to join it with itself 
+Expected: should fail immediately, else print the string 
+*/
+
+public static void SelfJoinTest() {
+    System.out.println();
+    System.out.println("Self Join Test");
+
+    KThread t = new KThread(new Runnable() {
+        public void run() {
+            System.out.println("Thread attempting to join itself...");
+            KThread.currentThread().join(); // should trigger assertion
+            System.out.println("joined, something is wrong");
+        }
+    }).setName("SelfJoinThread");
+
+    t.fork();
+
+    // give it time to run
+    for (int i = 0; i < 3; i++) {
+        KThread.yield();
+    }
+
+    System.out.println("Self join test completed (should have failed earlier).");
+    System.out.println();
+}
+
+
+
+
+    private static final char dbgThread = 't';
+
+    /**
+     * Additional state used by schedulers.
+     *
+     * @see	nachos.threads.PriorityScheduler.ThreadState
+     */
+    public Object schedulingState = null;
+
+    private static final int statusNew = 0;
+    private static final int statusReady = 1;
+    private static final int statusRunning = 2;
+    private static final int statusBlocked = 3;
+    private static final int statusFinished = 4;
+
+    /**
+     * The status of this thread. A thread can either be new (not yet forked),
+     * ready (on the ready queue but not running), running, or blocked (not
+     * on the ready queue and not running).
+     */
+    private int status = statusNew;
+    private String name = "(unnamed thread)";
+    private Runnable target;
+    private TCB tcb;
+
+    /**
+     * Unique identifer for this thread. Used to deterministically compare
+     * threads.
+     */
+    private int id = numCreated++;
+    /** Number of times the KThread constructor was called. */
+    private static int numCreated = 0;
+
+    private static ThreadQueue readyQueue = null;
+    private static KThread currentThread = null;
+    private static KThread toBeDestroyed = null;
+    private static KThread idleThread = null;
+
+    private LinkedList<KThread> waitQueue = new LinkedList<KThread>();
 }
