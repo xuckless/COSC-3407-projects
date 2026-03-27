@@ -99,72 +99,147 @@ public class ReactWater {
     System.out.println("Water was made!");
   }
   
+  
   /**
-   * Basic test case that forks 4 Hydrogen threads and 2 Oxygen threads.
-   * Successful execution should result in exactly 2 water molecules formed.
+   * Executes the complete suite of test cases for the ReactWater synchronization class.
    */
   public static void selfTest() {
-    System.out.println("\n\n--- Starting ReactWater Test ---\n");
-    final ReactWater rw = new ReactWater();
-    
-    for (int i = 1; i <= 4; i++) {
-      final int id = i;
-      new KThread(new Runnable() {
-        public void run() {
-          System.out.println("H atom " + id + " ready.");
-          rw.hReady();
-        }
-      }).setName("H_" + i).fork();
-    }
-    
-    for (int i = 1; i <= 2; i++) {
-      final int id = i;
-      new KThread(new Runnable() {
-        public void run() {
-          System.out.println("O atom " + id + " ready.");
-          rw.oReady();
-        }
-      }).setName("O_" + i).fork();
-    }
-    
-    KThread.yield();
-    KThread.yield();
-    
-    ReactWater.testImbalance();
+    System.out.println("\n\n--- MakeWater.java tests ---\n");
+    testPartA_Basics();
+    testPartB_WaitingWithDelays();
+    testPartC_Oversupply();
+    testPartD_MultipleReactions();
+    testPartE_RandomInterleaving();
+    testPartF_StressTest();
   }
   
   /**
-   * Stress test that creates an imbalance (10H and 2O).
-   * Verifies that only 2 molecules are made and excess atoms stay blocked
-   * without incorrectly triggering reactions or crashing.
+   * Helper method to dynamically spawn and fork a specified number of Hydrogen and Oxygen threads.
+   *
+   * @param rw The ReactWater instance to run the threads against.
+   * @param h  The number of Hydrogen threads to spawn.
+   * @param o  The number of Oxygen threads to spawn.
    */
-  public static void testImbalance() {
-    System.out.println("\n--- Starting ReactWater Imbalance Test (10H, 2O) ---");
-    final ReactWater rw = new ReactWater();
-    
-    for (int i = 1; i <= 10; i++) {
-      final int id = i;
+  private static void spawn(final ReactWater rw, int h, int o) {
+    for (int i = 0; i < h; i++) {
       new KThread(new Runnable() {
         public void run() {
           rw.hReady();
-          System.out.println("H atom " + id + " finished reaction.");
         }
-      }).setName("H_" + id).fork();
+      }).setName("H").fork();
     }
-    
-    for (int i = 1; i <= 2; i++) {
-      final int id = i;
+    for (int i = 0; i < o; i++) {
       new KThread(new Runnable() {
         public void run() {
           rw.oReady();
-          System.out.println("O atom " + id + " finished reaction.");
         }
-      }).setName("O_" + id).fork();
+      }).setName("O").fork();
     }
+  }
+  
+  /**
+   * Helper method to force the current thread to yield the CPU a specific number of times.
+   *
+   * @param times The number of times to yield.
+   */
+  private static void delayYield(int times) {
+    for (int i = 0; i < times; i++) KThread.yield();
+  }
+  
+  /**
+   * Tests the basic formation of a single water molecule by providing exactly two Hydrogen and one Oxygen atoms.
+   */
+  public static void testPartA_Basics() {
+    System.out.println("\n--- Part a: Verify basics (2H + 1O) ---");
+    final ReactWater rw = new ReactWater();
+    spawn(rw, 2, 1);
+    delayYield(10);
+  }
+  
+  /**
+   * Tests synchronization when atoms arrive asynchronously with delays between their arrivals.
+   */
+  public static void testPartB_WaitingWithDelays() {
+    System.out.println("\n--- Part b: Verify waiting with delays ---");
+    final ReactWater rw = new ReactWater();
     
-    for(int i = 0; i < 20; i++) {
-      KThread.yield();
+    new KThread(new Runnable() {
+      public void run() {
+        rw.hReady();
+      }
+    }).setName("H1").fork();
+    delayYield(2);
+    
+    new KThread(new Runnable() {
+      public void run() {
+        rw.oReady();
+      }
+    }).setName("O1").fork();
+    delayYield(2);
+    
+    new KThread(new Runnable() {
+      public void run() {
+        rw.hReady();
+      }
+    }).setName("H2").fork();
+    delayYield(10);
+  }
+  
+  /**
+   * Tests system stability and blocked states when provided an excess of one type of atom across multiple intervals.
+   */
+  public static void testPartC_Oversupply() {
+    System.out.println("\n--- Part c: Oversupply (3H + 2O then 1O + 2H) ---");
+    final ReactWater rw = new ReactWater();
+    
+    System.out.println("Spawning 3H + 2O...");
+    spawn(rw, 3, 2);
+    delayYield(10);
+    
+    System.out.println("Spawning 1O + 2H...");
+    spawn(rw, 2, 1);
+    delayYield(10);
+  }
+  
+  /**
+   * Tests the correct formation of multiple water molecules initiated concurrently.
+   */
+  public static void testPartD_MultipleReactions() {
+    System.out.println("\n--- Part d: Multiple reactions (4H + 2O) ---");
+    final ReactWater rw = new ReactWater();
+    spawn(rw, 4, 2);
+    delayYield(10);
+  }
+  
+  /**
+   * Tests the robustness of the condition variables by spawning atoms in a randomized, interleaved order.
+   */
+  public static void testPartE_RandomInterleaving() {
+    System.out.println("\n--- Part e: Random interleaving (Various order) ---");
+    final ReactWater rw = new ReactWater();
+    String[] seq = {"H", "O", "O", "H", "H", "H", "O", "H", "H"};
+    
+    for (int i = 0; i < seq.length; i++) {
+      final String type = seq[i];
+      new KThread(new Runnable() {
+        public void run() {
+          if (type.equals("H")) rw.hReady();
+          else rw.oReady();
+        }
+      }).setName(type).fork();
+      
+      if (i % 2 == 0) KThread.yield();
     }
-    System.out.println("--- Imbalance Test Yielding Finished ---");
+    delayYield(15);
+  }
+  
+  /**
+   * Performs a high-load stress test to ensure no deadlocks or race conditions occur under heavy concurrency.
+   */
+  public static void testPartF_StressTest() {
+    System.out.println("\n--- Part f: Stress test (100H + 50O expecting 50 waters) ---");
+    final ReactWater rw = new ReactWater();
+    spawn(rw, 100, 50);
+    delayYield(200);
   }
 }
