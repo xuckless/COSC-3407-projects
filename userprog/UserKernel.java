@@ -40,7 +40,7 @@ public class UserKernel extends ThreadedKernel {
 		userProcess.taskThreeTests();
 		
 		
-		System.out.println("");
+		System.out.println("\n");
 	}
 	
 	/**
