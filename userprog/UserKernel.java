@@ -37,8 +37,8 @@ public class UserKernel extends ThreadedKernel {
 		
 		
 		UserProcess userProcess = new UserProcess();
+		userProcess.taskOneTests();
 		userProcess.taskThreeTests();
-		
 		
 		System.out.println("\n");
 	}

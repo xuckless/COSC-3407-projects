@@ -166,7 +166,7 @@ public class Condition2 {
         final Lock lock3 = new Lock();
         final Condition2 cv3 = new Condition2(lock3);
 
-        // acquire lock, wake, then release it, if it doesnt crash, we are good.
+        // acquire lock, wake, then release it, if it doesn't crash, we are good.
         lock3.acquire();
         cv3.wake();
         lock3.release();

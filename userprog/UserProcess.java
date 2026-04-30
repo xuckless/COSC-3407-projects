@@ -489,6 +489,112 @@ public class UserProcess {
 		return 0;
 	}
 	
+	private int syscallCreate(int nameAddr) {
+		// read filename from virtual memory
+		String filename = readVirtualMemoryString(nameAddr, 256);
+		if (filename == null) { return - 1; }
+		
+		// now we find first free slot starting at i = 2
+		int slot = -1;
+		for (int i = 2; i < fileTable.length; i++) {
+			if (fileTable[i] == null) {
+				slot = i;
+				break;
+			}
+		}
+		
+		if (slot == -1) { return -1; } // no free slots
+		OpenFile file = UserKernel.fileSystem.open(filename, true); // if this is true, create
+		
+		if (file == null) { return -1; }
+		fileTable[slot] = file;
+		return slot;
+	}
+	
+	// this is the same as syscallCreate, just flipping a boolean
+	private int syscallOpen(int nameAddr) {
+		// read filename from virtual memory
+		String filename = readVirtualMemoryString(nameAddr, 256);
+		if (filename == null) { return - 1; }
+		
+		// now we find first free slot starting at i = 2
+		int slot = -1;
+		for (int i = 2; i < fileTable.length; i++) {
+			if (fileTable[i] == null) {
+				slot = i;
+				break;
+			}
+		}
+		
+		if (slot == -1) { return -1; } // no free slots
+		OpenFile file = UserKernel.fileSystem.open(filename, false); // if this is true, create
+		
+		if (file == null) { return -1; }
+		fileTable[slot] = file;
+		return slot;
+	}
+	
+	private int syscallRead(int fd, int bufAddr, int count) {
+		if (fd < 0 || fd >= fileTable.length || fileTable[fd] == null) { return -1;}
+		if (count < 0) { return -1;}
+		
+		int bytesRead = 0;
+		byte[] buf = new byte[pageSize]; // chunk by page to avoid JVM heap issues
+		while (count > 0) {
+			int toRead = Math.min(count, pageSize);
+			int r = fileTable[fd].read(buf, 0, toRead);
+			if (r < 0) { return -1;} // read an error
+			if (r == 0) { break; } // end of file
+			
+			int w = writeVirtualMemory(bufAddr, buf, 0, r);
+			bytesRead += w;
+			bufAddr += w;
+			count -= r;
+			
+			if (w < r) { break;} // cant write everything
+		}
+		return bytesRead;
+	}
+	
+	private int syscallWrite(int fd, int bufAddr, int count) {
+		if (fd < 0 || fd >= fileTable.length || fileTable[fd] == null) { return -1;}
+		if (count < 0) { return -1;}
+		
+		int bytesWritten = 0;
+		byte[] buf = new byte[pageSize]; // chunk by page to avoid JVM heap issues
+		while (count > 0) {
+			int toWrite = Math.min(count, pageSize);
+			int r = readVirtualMemory(bufAddr, buf, 0, toWrite);
+			if (r <= 0) { return -1;} // nothing to write
+			int w = fileTable[fd].write(buf, 0, r);
+			if (w < r) { return -1;} // disk is full or stream is closed
+			
+			bytesWritten += w;
+			bufAddr += w;
+			count -= w;
+		}
+		return bytesWritten;
+	}
+	
+	private int syscallClose(int fd) {
+		if (fd < 0 || fd >= fileTable.length || fileTable[fd] == null) { return -1;}
+		fileTable[fd].close();
+		fileTable[fd] = null; // free up the slot
+		
+		return 0;
+	}
+	
+	private int syscallUnlink(int nameAddr) {
+		// read filename from virtual memory
+		String filename = readVirtualMemoryString(nameAddr, 256);
+		if (filename == null) { return -1;}
+		
+		boolean result = UserKernel.fileSystem.remove(filename);
+		if (!result) { return -1;} // this is returned if the file cannot be removed
+		
+		return 0;
+	}
+	
 	/**
 	 * Handle the exec() system call.
 	 *
@@ -722,6 +828,18 @@ public class UserProcess {
 				return handleExec(a0, a1, a2);
 			case syscallJoin:
 				return handleJoin(a0, a1);
+			case syscallCreate:
+				return syscallCreate(a0);
+			case syscallOpen:
+				return syscallOpen(a0);
+			case syscallRead:
+				return syscallRead(a0, a1, a2);
+			case syscallWrite:
+				return syscallWrite(a0, a1, a2);
+			case syscallClose:
+				return syscallClose(a0);
+			case syscallUnlink:
+				return syscallUnlink(a0);
 			
 			default:
 				// Bullet-proofing: an unknown syscall is a user error, not a
@@ -856,6 +974,62 @@ public class UserProcess {
 		testMemoryRecycling();
 		testSecurityPermissions();
 		System.out.println("==== Test suite finished ====");
+	}
+	
+	public void taskOneTests() {
+		System.out.println("==== Task 1: File System Tests ====");
+		System.out.println();
+		
+		// Test 1: slot allocation starts at index 2
+		System.out.println("[Test 1] File descriptor slot allocation:");
+		int slot = -1;
+		for (int i = 2; i < fileTable.length; i++) {
+			if (fileTable[i] == null) { slot = i; break; }
+		}
+		System.out.println("  first free slot: " + slot + " (expected 2: " + (slot == 2 ? "PASSED" : "FAILED") + ")");
+		System.out.println();
+		
+		// Test 2: invalid fd returns -1
+		System.out.println("[Test 2] Invalid fd handling:");
+		int r1 = syscallRead(-1, 0, 10);
+		int r2 = syscallRead(20, 0, 10);
+		int r3 = syscallWrite(-1, 0, 10);
+		int r4 = syscallClose(5);
+		System.out.println("  read fd=-1: " + (r1 == -1 ? "PASSED" : "FAILED"));
+		System.out.println("  read fd=20: " + (r2 == -1 ? "PASSED" : "FAILED"));
+		System.out.println("  write fd=-1: " + (r3 == -1 ? "PASSED" : "FAILED"));
+		System.out.println("  close null slot: " + (r4 == -1 ? "PASSED" : "FAILED"));
+		System.out.println();
+		
+		// Test 3: close nulls the slot
+		System.out.println("[Test 3] Close nulls the slot:");
+		fileTable[2] = UserKernel.console.openForReading(); // borrow console as a dummy file
+		int closeResult = syscallClose(2);
+		System.out.println("  close returned: " + (closeResult == 0 ? "PASSED" : "FAILED"));
+		System.out.println("  slot is null after close: " + (fileTable[2] == null ? "PASSED" : "FAILED"));
+		System.out.println();
+		
+		// Test 4: table is full at 16 slots
+		System.out.println("[Test 4] File table capacity:");
+		for (int i = 2; i < fileTable.length; i++) {
+			fileTable[i] = UserKernel.console.openForReading();
+		}
+		int fullSlot = -1;
+		for (int i = 2; i < fileTable.length; i++) {
+			if (fileTable[i] == null) { fullSlot = i; break; }
+		}
+		System.out.println("  no free slot when full: " + (fullSlot == -1 ? "PASSED" : "FAILED"));
+		for (int i = 2; i < fileTable.length; i++) fileTable[i] = null;
+		System.out.println();
+		
+		// Test 5: stdin/stdout pre-filled
+		System.out.println("[Test 5] stdin/stdout pre-filled:");
+		System.out.println("  slot 0 (stdin) not null: " + (fileTable[0] != null ? "PASSED" : "FAILED"));
+		System.out.println("  slot 1 (stdout) not null: " + (fileTable[1] != null ? "PASSED" : "FAILED"));
+		System.out.println();
+		
+		System.out.println("==== Task 1 tests finished ====");
+		System.out.println();
 	}
 	
 	public void testBasicExecution() {
