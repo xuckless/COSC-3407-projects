@@ -4,10 +4,18 @@ import nachos.machine.*;
 import nachos.threads.*;
 import nachos.userprog.*;
 
+import java.util.LinkedList;
+
 /**
  * A kernel that can support multiple user processes.
  */
 public class UserKernel extends ThreadedKernel {
+
+    // Frame management
+    private static Lock frameLock;
+    private static LinkedList<Integer> freeFrames;
+
+
 	/**
 	 * Allocate a new user kernel.
 	 */
@@ -24,11 +32,55 @@ public class UserKernel extends ThreadedKernel {
 		
 		console = new SynchConsole(Machine.console());
 		
-		Machine.processor().setExceptionHandler(new Runnable() {
-			public void run() { exceptionHandler(); }
-		});
+		frameLock = new Lock();
+        freeFrames = new LinkedList<Integer>();
+
+        int numPhysPages = Machine.processor().getNumPhysPages();
+
+        for (int i = 0; i < numPhysPages; i++) {
+            freeFrames.add(i);
+        }
 	}
-	
+	 /**
+     * Allocate a number of physical frames.
+     * @param numFrames number of frames requested
+     * @return array of frame numbers, or null if not enough free frames
+     */
+    public static int[] allocateFrames(int numFrames) {
+        frameLock.acquire();
+
+        if (numFrames <= 0 || freeFrames.size() < numFrames) {
+            frameLock.release();
+            return null;
+        }
+
+        int[] frames = new int[numFrames];
+
+        for (int i = 0; i < numFrames; i++) {
+            frames[i] = freeFrames.removeFirst();
+        }
+
+        frameLock.release();
+        return frames;
+    }
+	/**
+     * Release previously allocated frames back to the free list.
+     * @param frames array of frame numbers to release
+     */
+    public static void releaseFrames(int[] frames) {
+        if (frames == null) {
+            return;
+        }
+
+        frameLock.acquire();
+
+        for (int i = 0; i < frames.length; i++) {
+            freeFrames.add(frames[i]);
+        }
+
+        frameLock.release();
+    }
+
 	/**
 	 * Test the console device.
 	 */
@@ -38,9 +90,11 @@ public class UserKernel extends ThreadedKernel {
 		
 		UserProcess userProcess = new UserProcess();
 		userProcess.taskOneTests();
+		userProcess.taskTwoTests();
 		userProcess.taskThreeTests();
 		
 		System.out.println("\n");
+		freeFrames.clear();
 	}
 	
 	/**
@@ -87,8 +141,11 @@ public class UserKernel extends ThreadedKernel {
 		super.run();
 		
 		UserProcess process = UserProcess.newUserProcess();
-		
+		System.out.println(ThreadedKernel.fileSystem);
 		String shellProgram = Machine.getShellProgramName();
+		System.out.println();
+		System.out.println("SHELL PROGRAM = [" + Machine.getShellProgramName() + "]");
+		System.out.println();
 		Lib.assertTrue(process.execute(shellProgram, new String[] { }));
 		
 		KThread.currentThread().finish();

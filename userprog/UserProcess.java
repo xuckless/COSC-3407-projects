@@ -264,6 +264,7 @@ public class UserProcess {
 	 * @return <tt>true</tt> if the executable was successfully loaded.
 	 */
 	private boolean load(String name, String[] args) {
+
 		Lib.debug(dbgProcess, "UserProcess.load(\"" + name + "\")");
 		
 		OpenFile executable = ThreadedKernel.fileSystem.open(name, false);
@@ -321,22 +322,37 @@ public class UserProcess {
 			return false;
 		
 		// store arguments in last page
-		int entryOffset = (numPages-1)*pageSize;
-		int stringOffset = entryOffset + args.length*4;
-		
-		this.argc = args.length;
-		this.argv = entryOffset;
-		
-		for (int i=0; i<argv.length; i++) {
-			byte[] stringOffsetBytes = Lib.bytesFromInt(stringOffset);
-			Lib.assertTrue(writeVirtualMemory(entryOffset,stringOffsetBytes) == 4);
+		int argPageVpn = numPages - 1;
+		int base = argPageVpn * pageSize;
+
+		byte[] argPage = new byte[pageSize];
+
+		int entryOffset = 0;
+		int stringOffset = argc * 4;
+
+		this.argc = argc;
+		this.argv = base;
+
+		for (int i = 0; i < argc; i++) {
+
+			// pointer to string
+			byte[] ptr = Lib.bytesFromInt(base + stringOffset);
+			System.arraycopy(ptr, 0, argPage, entryOffset, 4);
 			entryOffset += 4;
-			Lib.assertTrue(writeVirtualMemory(stringOffset, argv[i]) == argv[i].length);
-			stringOffset += argv[i].length;
-			Lib.assertTrue(writeVirtualMemory(stringOffset,new byte[] { 0 }) == 1);
-			stringOffset += 1;
+
+			// string bytes
+			byte[] strBytes = args[i].getBytes();
+
+			System.arraycopy(strBytes, 0, argPage, stringOffset, strBytes.length);
+			argPage[stringOffset + strBytes.length] = 0;
+
+			stringOffset += strBytes.length + 1;
 		}
-		
+		int written = writeVirtualMemory(base, argPage, 0, pageSize);
+
+		if (written != pageSize)
+			return false;
+
 		return true;
 	}
 	
@@ -356,7 +372,7 @@ public class UserProcess {
 		
 		// Pull <numPages> physical frames from the global free-frame pool.
 		// Frames may be non-contiguous; that's exactly the point.
-		int[] physFrames = allocateFrames(numPages);
+		int[] physFrames =UserKernel.allocateFrames(numPages);
 		if (physFrames == null) {
 			coff.close();
 			Lib.debug(dbgProcess, "\tcouldn't allocate physical frames");
@@ -406,7 +422,7 @@ public class UserProcess {
 		pageLock.acquire();
 		for (int i = 0; i < pageTable.length; i++) {
 			if (pageTable[i] != null && pageTable[i].valid) {
-				freeFrames.add(pageTable[i].ppn);
+				UserKernel.releaseFrames(new int[]{pageTable[i].ppn});
 				pageTable[i].valid = false;
 			}
 		}
@@ -455,18 +471,7 @@ public class UserProcess {
 		pageLock.release();
 	}
 	
-	private static int[] allocateFrames(int numFrames) {
-		pageLock.acquire();
-		if (numFrames <= 0 || freeFrames.size() < numFrames) {
-			pageLock.release();
-			return null;
-		}
-		int[] frames = new int[numFrames];
-		for (int i = 0; i < numFrames; i++)
-			frames[i] = freeFrames.removeFirst();
-		pageLock.release();
-		return frames;
-	}
+
 	
 	// ====================================================================
 	// System call handlers
@@ -614,31 +619,36 @@ public class UserProcess {
 		String filename = readVirtualMemoryString(fileNameVaddr, MAX_STRING_LENGTH);
 		if (filename == null)
 			return -1;
-		
+		String[] argsCopy = new String[argc];
 		// The exec syscall must be passed a coff binary.
 		if (!filename.endsWith(".coff"))
 			return -1;
 		
 		// Read each argv[i] pointer, then dereference it to a string.
-		String[] args = new String[argc];
+		
+
 		for (int i = 0; i < argc; i++) {
 			byte[] argPtrBytes = new byte[4];
-			int read = readVirtualMemory(argvVaddr + i * 4, argPtrBytes);
-			if (read != 4)
+
+			if (readVirtualMemory(argvVaddr + i * 4, argPtrBytes) != 4)
 				return -1;
-			
-			int argStrVaddr = Lib.bytesToInt(argPtrBytes, 0);
-			args[i] = readVirtualMemoryString(argStrVaddr, MAX_STRING_LENGTH);
-			if (args[i] == null)
+
+			int argVaddr = Lib.bytesToInt(argPtrBytes, 0);
+
+			String arg = readVirtualMemoryString(argVaddr, MAX_STRING_LENGTH);
+
+			if (arg == null)
 				return -1;
-		}
+
+			argsCopy[i] = arg;
+}
 		
 		// Create the child. The constructor already incremented the active
 		// process count; if execute() fails we must roll that back.
 		UserProcess child = UserProcess.newUserProcess();
 		child.parent = this;
 		
-		if (!child.execute(filename, args)) {
+		if (!child.execute(filename, argsCopy)) {
 			// Roll back the active-process bump done in the child's ctor so
 			// the "last process halts" logic stays accurate.
 			activeLock.acquire();
@@ -976,6 +986,18 @@ public class UserProcess {
 		System.out.println("==== Test suite finished ====");
 	}
 	
+		public void taskTwoTests() {
+
+		selftestvirtualmemory();
+		System.out.println();
+
+		selftestframes();
+		System.out.println();
+
+		
+	}
+
+
 	public void taskOneTests() {
 		System.out.println("==== Task 1: File System Tests ====");
 		System.out.println();
@@ -1031,7 +1053,163 @@ public class UserProcess {
 		System.out.println("==== Task 1 tests finished ====");
 		System.out.println();
 	}
-	
+
+	public static void selftestframes() {
+    System.out.println("===== Frame Allocation Tests =====");
+	System.out.println();
+
+    int totalFrames = Machine.processor().getNumPhysPages();
+    System.out.println("Total physical frames: " + totalFrames + "\n");
+
+    // Test 1
+    System.out.println("[Test 1] Allocate 1 frame:");
+    int[] f1 = UserKernel.allocateFrames(1);
+    System.out.println("  returned array != null: " + (f1 != null ? "PASSED" : "FAILED"));
+    System.out.println("  length == 1: " + ((f1 != null && f1.length == 1) ? "PASSED" : "FAILED"));
+
+    // Test 2
+    System.out.println("\n[Test 2] Allocate 3 frames:");
+    int[] f2 = UserKernel.allocateFrames(3);
+    System.out.println("  returned array != null: " + (f2 != null ? "PASSED" : "FAILED"));
+    System.out.println("  length == 3: " + ((f2 != null && f2.length == 3) ? "PASSED" : "FAILED"));
+
+    // Test 3
+    System.out.println("\n[Test 3] Invalid request (0 frames):");
+    int[] f3 = UserKernel.allocateFrames(0);
+    System.out.println("  returned null: " + (f3 == null ? "PASSED" : "FAILED"));
+
+    // Test 4
+    System.out.println("\n[Test 4] Invalid request (negative):");
+    int[] f4 = UserKernel.allocateFrames(-1);
+    System.out.println("  returned null: " + (f4 == null ? "PASSED" : "FAILED"));
+
+    // Test 5
+    System.out.println("\n[Test 5] Request more than available:");
+    int[] f5 = UserKernel.allocateFrames(totalFrames + 1);
+    System.out.println("  returned null: " + (f5 == null ? "PASSED" : "FAILED"));
+
+    // Test 6
+    System.out.println("\n[Test 6] Exhaust remaining frames:");
+
+	int count = 0;
+	while (true) {
+		int[] temp = UserKernel.allocateFrames(1);
+		if (temp == null) break;
+			count++;
+	}
+
+	System.out.println("  frames allocated until exhaustion: " + count);
+
+	int[] f6 = UserKernel.allocateFrames(1);
+	System.out.println("  allocation returns null when empty: "
+        + (f6 == null ? "PASSED" : "FAILED"));
+
+    // Test 7
+    System.out.println("\n[Test 7] Allocate when empty:");
+    int[] f7 = UserKernel.allocateFrames(1);
+    System.out.println("  returned null: " + (f7 == null ? "PASSED" : "FAILED"));
+
+    // Test 8
+    System.out.println("\n[Test 8] Release frames:");
+    UserKernel.releaseFrames(f1);
+    UserKernel.releaseFrames(f2);
+    UserKernel.releaseFrames(f6);
+    System.out.println("  freeFrames > 0: " + (freeFrames.size() > 0 ? "PASSED" : "FAILED"));
+
+    // Test 9
+    System.out.println("\n[Test 9] Allocate after release:");
+    int[] f8 = UserKernel.allocateFrames(2);
+    System.out.println("  allocation succeeds: " + (f8 != null ? "PASSED" : "FAILED"));
+    System.out.println("  length == 2: " + ((f8 != null && f8.length == 2) ? "PASSED" : "FAILED"));
+
+    System.out.println("\n==== Frame Allocation Tests Finished ====\n");
+}
+
+public static void selftestvirtualmemory() {
+    System.out.println("===== Virtual Memory Read/Write Test =====");
+	System.out.println();
+
+    UserProcess process = new UserProcess();
+
+    int numPages = 4;
+    int pageSize = Processor.pageSize;
+
+    System.out.println("[Setup] Requesting " + numPages + " physical frames...");
+    int[] frames = UserKernel.allocateFrames(numPages);
+
+    if (frames == null) {
+        System.out.println("  FAILED: Could not allocate frames\n");
+        return;
+    }
+
+    System.out.println("  Frames allocated: ");
+    for (int i = 0; i < frames.length; i++) {
+        System.out.println("    VPN " + i + " -> PPN " + frames[i]);
+    }
+
+    // Initialize page table
+    process.pageTable = new TranslationEntry[numPages];
+    for (int i = 0; i < numPages; i++) {
+        process.pageTable[i] = new TranslationEntry(i, frames[i], true, false, false, false);
+    }
+    process.numPages = numPages;
+
+    System.out.println("\n[Setup] Page table initialized with valid mappings");
+
+    // Cross-page test setup
+    int vaddr = pageSize - 2;
+    byte[] writeBuffer = {1, 2, 3, 4, 5, 6};
+    byte[] readBuffer = new byte[6];
+
+    System.out.println("\n[Test 1] Writing across page boundary");
+    System.out.println("  Start virtual address: " + vaddr);
+    System.out.println("  This spans:");
+    System.out.println("    Page " + (vaddr / pageSize) + " (last 2 bytes)");
+    System.out.println("    Page " + ((vaddr / pageSize) + 1) + " (next 4 bytes)");
+
+    System.out.print("  WriteBuffer = [ ");
+    for (byte b : writeBuffer) System.out.print(b + " ");
+    System.out.println("]");
+
+    int bytesWritten = process.writeVirtualMemory(vaddr, writeBuffer, 0, 6);
+    System.out.println("  BytesWritten = " + bytesWritten + " (expected 6): "
+            + (bytesWritten == 6 ? "PASSED" : "FAILED"));
+
+    System.out.println("\n[Test 2] Reading back across same boundary");
+
+    int bytesRead = process.readVirtualMemory(vaddr, readBuffer, 0, 6);
+    System.out.println("  BytesRead = " + bytesRead + " (expected 6): "
+            + (bytesRead == 6 ? "PASSED" : "FAILED"));
+
+    System.out.print("  ReadBuffer = [ ");
+    for (byte b : readBuffer) System.out.print(b + " ");
+    System.out.println("]");
+
+    System.out.println("\n[Test 3] Verifying data integrity");
+
+    boolean match = true;
+    for (int i = 0; i < writeBuffer.length; i++) {
+        if (writeBuffer[i] != readBuffer[i]) {
+            match = false;
+            System.out.println("  Mismatch at index " + i +
+                    ": expected " + writeBuffer[i] +
+                    ", got " + readBuffer[i]);
+            break;
+        }
+    }
+
+    System.out.println("  ReadBuffer matches WriteBuffer: "
+            + (match ? "PASSED" : "FAILED"));
+
+    System.out.println("\n[Cleanup] Releasing allocated frames...");
+
+    // Cleanup
+    UserKernel.releaseFrames(frames);
+	System.out.println();
+    System.out.println("===== Test Complete =====");
+}
+
+
 	public void testBasicExecution() {
 		System.out.println("[Test 1] Basic Execution:");
 		System.out.println("Simulating: pid = syscall.exec(\"halt.coff\") and syscall.exit(0) inside the child.");
@@ -1045,7 +1223,7 @@ public class UserProcess {
 		pidLock.release();
 		
 		int framesBefore = freeFrames.size();
-		int[] childFrames = allocateFrames(10);
+		int[] childFrames =UserKernel.allocateFrames(10);
 		boolean execOk = (childFrames != null && childFrames.length == 10);
 		
 		System.out.println("  Child PID assigned = " + childPid + "  (valid: " + (childPid >= 0) + ")");
@@ -1141,7 +1319,7 @@ public class UserProcess {
 		int completed = 0;
 		
 		for (int i = 0; i < 100; i++) {
-			int[] frames = allocateFrames(framesPerProc);   // exec()
+			int[] frames =UserKernel.allocateFrames(framesPerProc);   // exec()
 			if (frames == null) {
 				System.out.println("  Allocation failed at iter " + i);
 				break;
