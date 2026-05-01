@@ -328,9 +328,9 @@ public class UserProcess {
 		byte[] argPage = new byte[pageSize];
 
 		int entryOffset = 0;
-		int stringOffset = argc * 4;
+		int stringOffset = args.length * 4;
 
-		this.argc = argc;
+		this.argc = args.length;
 		this.argv = base;
 
 		for (int i = 0; i < argc; i++) {
@@ -1053,77 +1053,82 @@ public class UserProcess {
 		System.out.println("==== Task 1 tests finished ====");
 		System.out.println();
 	}
-
+	
 	public static void selftestframes() {
-    System.out.println("===== Frame Allocation Tests =====");
-	System.out.println();
-
-    int totalFrames = Machine.processor().getNumPhysPages();
-    System.out.println("Total physical frames: " + totalFrames + "\n");
-
-    // Test 1
-    System.out.println("[Test 1] Allocate 1 frame:");
-    int[] f1 = UserKernel.allocateFrames(1);
-    System.out.println("  returned array != null: " + (f1 != null ? "PASSED" : "FAILED"));
-    System.out.println("  length == 1: " + ((f1 != null && f1.length == 1) ? "PASSED" : "FAILED"));
-
-    // Test 2
-    System.out.println("\n[Test 2] Allocate 3 frames:");
-    int[] f2 = UserKernel.allocateFrames(3);
-    System.out.println("  returned array != null: " + (f2 != null ? "PASSED" : "FAILED"));
-    System.out.println("  length == 3: " + ((f2 != null && f2.length == 3) ? "PASSED" : "FAILED"));
-
-    // Test 3
-    System.out.println("\n[Test 3] Invalid request (0 frames):");
-    int[] f3 = UserKernel.allocateFrames(0);
-    System.out.println("  returned null: " + (f3 == null ? "PASSED" : "FAILED"));
-
-    // Test 4
-    System.out.println("\n[Test 4] Invalid request (negative):");
-    int[] f4 = UserKernel.allocateFrames(-1);
-    System.out.println("  returned null: " + (f4 == null ? "PASSED" : "FAILED"));
-
-    // Test 5
-    System.out.println("\n[Test 5] Request more than available:");
-    int[] f5 = UserKernel.allocateFrames(totalFrames + 1);
-    System.out.println("  returned null: " + (f5 == null ? "PASSED" : "FAILED"));
-
-    // Test 6
-    System.out.println("\n[Test 6] Exhaust remaining frames:");
-
-	int count = 0;
-	while (true) {
-		int[] temp = UserKernel.allocateFrames(1);
-		if (temp == null) break;
+		System.out.println("===== Frame Allocation Tests =====");
+		System.out.println();
+		
+		int totalFrames = Machine.processor().getNumPhysPages();
+		System.out.println("Total physical frames: " + totalFrames + "\n");
+		
+		// Test 1
+		System.out.println("[Test 1] Allocate 1 frame:");
+		int[] f1 = UserKernel.allocateFrames(1);
+		System.out.println("  returned array != null: " + (f1 != null ? "PASSED" : "FAILED"));
+		System.out.println("  length == 1: " + ((f1 != null && f1.length == 1) ? "PASSED" : "FAILED"));
+		
+		// Test 2
+		System.out.println("\n[Test 2] Allocate 3 frames:");
+		int[] f2 = UserKernel.allocateFrames(3);
+		System.out.println("  returned array != null: " + (f2 != null ? "PASSED" : "FAILED"));
+		System.out.println("  length == 3: " + ((f2 != null && f2.length == 3) ? "PASSED" : "FAILED"));
+		
+		// Test 3
+		System.out.println("\n[Test 3] Invalid request (0 frames):");
+		int[] f3 = UserKernel.allocateFrames(0);
+		System.out.println("  returned null: " + (f3 == null ? "PASSED" : "FAILED"));
+		
+		// Test 4
+		System.out.println("\n[Test 4] Invalid request (negative):");
+		int[] f4 = UserKernel.allocateFrames(-1);
+		System.out.println("  returned null: " + (f4 == null ? "PASSED" : "FAILED"));
+		
+		// Test 5
+		System.out.println("\n[Test 5] Request more than available:");
+		int[] f5 = UserKernel.allocateFrames(totalFrames + 1);
+		System.out.println("  returned null: " + (f5 == null ? "PASSED" : "FAILED"));
+		
+		// Test 6 — track every allocation so we can release them later
+		System.out.println("\n[Test 6] Exhaust remaining frames:");
+		java.util.LinkedList<int[]> exhausted = new java.util.LinkedList<int[]>();
+		int count = 0;
+		while (true) {
+			int[] temp = UserKernel.allocateFrames(1);
+			if (temp == null) break;
+			exhausted.add(temp);    // FIX: keep the reference instead of leaking it
 			count++;
+		}
+		System.out.println("  frames allocated until exhaustion: " + count);
+		
+		int[] f6 = UserKernel.allocateFrames(1);
+		System.out.println("  allocation returns null when empty: "
+			+ (f6 == null ? "PASSED" : "FAILED"));
+		
+		// Test 7
+		System.out.println("\n[Test 7] Allocate when empty:");
+		int[] f7 = UserKernel.allocateFrames(1);
+		System.out.println("  returned null: " + (f7 == null ? "PASSED" : "FAILED"));
+		
+		// Test 8 — release EVERYTHING we held in this method
+		System.out.println("\n[Test 8] Release frames:");
+		UserKernel.releaseFrames(f1);
+		UserKernel.releaseFrames(f2);
+		UserKernel.releaseFrames(f6);                       // null-safe inside releaseFrames
+		for (int[] arr : exhausted)                         // FIX: release the 60 leaked frames
+			UserKernel.releaseFrames(arr);
+		System.out.println("  freeFrames > 0: " + (freeFrames.size() > 0 ? "PASSED" : "FAILED"));
+		
+		// Test 9
+		System.out.println("\n[Test 9] Allocate after release:");
+		int[] f8 = UserKernel.allocateFrames(2);
+		System.out.println("  allocation succeeds: " + (f8 != null ? "PASSED" : "FAILED"));
+		System.out.println("  length == 2: " + ((f8 != null && f8.length == 2) ? "PASSED" : "FAILED"));
+		
+		// FIX: release f8 too, so the pool is fully restored when this method returns
+		UserKernel.releaseFrames(f8);
+		
+		System.out.println("\n==== Frame Allocation Tests Finished ====\n");
 	}
-
-	System.out.println("  frames allocated until exhaustion: " + count);
-
-	int[] f6 = UserKernel.allocateFrames(1);
-	System.out.println("  allocation returns null when empty: "
-        + (f6 == null ? "PASSED" : "FAILED"));
-
-    // Test 7
-    System.out.println("\n[Test 7] Allocate when empty:");
-    int[] f7 = UserKernel.allocateFrames(1);
-    System.out.println("  returned null: " + (f7 == null ? "PASSED" : "FAILED"));
-
-    // Test 8
-    System.out.println("\n[Test 8] Release frames:");
-    UserKernel.releaseFrames(f1);
-    UserKernel.releaseFrames(f2);
-    UserKernel.releaseFrames(f6);
-    System.out.println("  freeFrames > 0: " + (freeFrames.size() > 0 ? "PASSED" : "FAILED"));
-
-    // Test 9
-    System.out.println("\n[Test 9] Allocate after release:");
-    int[] f8 = UserKernel.allocateFrames(2);
-    System.out.println("  allocation succeeds: " + (f8 != null ? "PASSED" : "FAILED"));
-    System.out.println("  length == 2: " + ((f8 != null && f8.length == 2) ? "PASSED" : "FAILED"));
-
-    System.out.println("\n==== Frame Allocation Tests Finished ====\n");
-}
 
 public static void selftestvirtualmemory() {
     System.out.println("===== Virtual Memory Read/Write Test =====");
@@ -1208,34 +1213,30 @@ public static void selftestvirtualmemory() {
 	System.out.println();
     System.out.println("===== Test Complete =====");
 }
-
-
+	
+	
 	public void testBasicExecution() {
 		System.out.println("[Test 1] Basic Execution:");
 		System.out.println("Simulating: pid = syscall.exec(\"halt.coff\") and syscall.exit(0) inside the child.");
 		System.out.println("Expectation: Exec returns a valid positive PID. Child loads into its own address space, executes, and kernel cleans up process state on exit.");
-		
-		initializeFreeFramesIfNeeded();
 		
 		// Simulate exec(): pull a unique PID and allocate the child's frames.
 		pidLock.acquire();
 		int childPid = nextPid++;
 		pidLock.release();
 		
-		int framesBefore = freeFrames.size();
-		int[] childFrames =UserKernel.allocateFrames(10);
+		int framesBefore = UserKernel.getFreeFrameCount();
+		int[] childFrames = UserKernel.allocateFrames(10);
 		boolean execOk = (childFrames != null && childFrames.length == 10);
 		
 		System.out.println("  Child PID assigned = " + childPid + "  (valid: " + (childPid >= 0) + ")");
 		System.out.println("  Frames allocated   = " + (execOk ? childFrames.length : 0));
 		
-		// Simulate exit(): unloadSections returns the frames to the global pool.
-		if (childFrames != null) {
-			pageLock.acquire();
-			for (int f : childFrames) freeFrames.add(f);
-			pageLock.release();
-		}
-		int framesAfter = freeFrames.size();
+		// Simulate exit(): return the frames to the SAME pool we took them from.
+		if (childFrames != null)
+			UserKernel.releaseFrames(childFrames);
+		
+		int framesAfter = UserKernel.getFreeFrameCount();
 		boolean cleanupOk = (framesAfter == framesBefore);
 		System.out.println("  Frames before=" + framesBefore + ", after=" + framesAfter + "  (cleanup OK: " + cleanupOk + ")");
 		
@@ -1313,25 +1314,21 @@ public static void selftestvirtualmemory() {
 		System.out.println("Simulating: Loop 100 times: pid = syscall.exec(\"small.coff\"); syscall.join(pid);");
 		System.out.println("Expectation: System executes all 100 without memory exhaustion. Pages freed on exit.");
 		
-		initializeFreeFramesIfNeeded();
-		int initialFrames = freeFrames.size();
+		int initialFrames = UserKernel.getFreeFrameCount();
 		int framesPerProc = 5;          // pretend small.coff needs 5 pages
 		int completed = 0;
 		
 		for (int i = 0; i < 100; i++) {
-			int[] frames =UserKernel.allocateFrames(framesPerProc);   // exec()
+			int[] frames = UserKernel.allocateFrames(framesPerProc);   // exec()
 			if (frames == null) {
 				System.out.println("  Allocation failed at iter " + i);
 				break;
 			}
-			// exit() / unloadSections() returns the frames to the pool.
-			pageLock.acquire();
-			for (int f : frames) freeFrames.add(f);
-			pageLock.release();
+			UserKernel.releaseFrames(frames);                           // exit()
 			completed++;
 		}
 		
-		int finalFrames = freeFrames.size();
+		int finalFrames = UserKernel.getFreeFrameCount();
 		boolean noLeak = (finalFrames == initialFrames);
 		
 		System.out.println("  Iterations completed: " + completed + " / 100");

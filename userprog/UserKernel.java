@@ -2,7 +2,6 @@ package nachos.userprog;
 
 import nachos.machine.*;
 import nachos.threads.*;
-import nachos.userprog.*;
 
 import java.util.LinkedList;
 
@@ -21,6 +20,16 @@ public class UserKernel extends ThreadedKernel {
 	 */
 	public UserKernel() {
 		super();
+	}
+	
+	/**
+	 * @return the current number of free physical frames.
+	 */
+	public static int getFreeFrameCount() {
+		frameLock.acquire();
+		int n = freeFrames.size();
+		frameLock.release();
+		return n;
 	}
 	
 	/**
@@ -94,7 +103,7 @@ public class UserKernel extends ThreadedKernel {
 		userProcess.taskThreeTests();
 		
 		System.out.println("\n");
-		freeFrames.clear();
+//		freeFrames.clear();
 	}
 	
 	/**

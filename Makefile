@@ -50,6 +50,6 @@ doc:
 	javadoc $(JAVADOCPARAMS) -d ../doc -sourcepath .. $(PACKAGES)
 
 test:
-	cd ../test ; gmake
+	cd ../test ; make
 
 ag:	$(patsubst ../ag/%.java,nachos/ag/%.class,$(wildcard ../ag/*.java))

@@ -9,29 +9,28 @@
 #		setenv ARCHDIR ../mips-x86.win32-xgcc
 
 # you need to point to the right executables
-GCCDIR = ../mips-x86.linux-xgcc/
+GCCDIR = $(ARCHDIR)/mips-
 
 ASFLAGS = -mips1
 CPPFLAGS =
 CFLAGS = -O2 -B$(GCCDIR) -G 0 -Wa,-mips1 -nostdlib -ffreestanding
 LDFLAGS = -s -T script -N -warn-common -warn-constructors -warn-multiple-gp
 
-CC = $(GCCDIR)/mips-gcc
-AS = $(GCCDIR)/mips-as
-LD = $(GCCDIR)/mips-ld
-CPP = $(GCCDIR)/mips-cpp
-CPP0 = $(GCCDIR)/cpp0
-AR = $(GCCDIR)/mips-ar
-RANLIB = $(GCCDIR)/mips-ranlib
+CC = $(GCCDIR)gcc
+AS = $(GCCDIR)as
+LD = $(GCCDIR)ld
+CPP = $(GCCDIR)cpp
+AR = $(GCCDIR)ar
+RANLIB = $(GCCDIR)ranlib
 
 STDLIB_H = stdio.h stdlib.h ag.h
 STDLIB_C = stdio.c stdlib.c
 STDLIB_O = start.o stdio.o stdlib.o
 
-LIB = assert atoi printf readline stdio strncmp strcat strcmp strcpy strlen memcpy memset 
+LIB = assert atoi printf readline stdio strncmp strcat strcmp strcpy strlen memcpy memset
 NLIB = libnachos.a
 
-TARGETS = halt sh matmult sort echo cat cp mv rm create #chat chatserver
+TARGETS = halt sh matmult sort echo cat cp mv rm #chat chatserver
 
 .SECONDARY: $(patsubst %.c,%.o,$(wildcard *.c))
 
